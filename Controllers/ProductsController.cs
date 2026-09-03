@@ -6,15 +6,14 @@ namespace LegacyECommerceApi.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-    public class ProductsController : ControllerBase
+    public class ProductsController : LegacyApiController
     {
         private readonly IProductRepository _productRepository;
-        private readonly ILogger<ProductsController> _logger;
 
         public ProductsController(IProductRepository productRepository, ILogger<ProductsController> logger)
+            : base(logger)
         {
             _productRepository = productRepository;
-            _logger = logger;
         }
 
         [HttpGet]
@@ -27,8 +26,7 @@ namespace LegacyECommerceApi.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error retrieving products");
-                return StatusCode(500, "Internal server error");
+                return Failure(ex, "Error retrieving products");
             }
         }
 
@@ -46,14 +44,15 @@ namespace LegacyECommerceApi.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error retrieving product {ProductId}", id);
-                return StatusCode(500, "Internal server error");
+                return Failure(ex, "Error retrieving product {ProductId}", id);
             }
         }
 
         [HttpPost]
         public ActionResult<Product> PostProduct(Product product)
         {
+            // Unreachable in production: [ApiController] answers 400 with ValidationProblemDetails
+            // before the action body runs. Kept as the safety net if that attribute is ever removed.
             if (!ModelState.IsValid)
             {
                 return BadRequest(ModelState);
@@ -66,8 +65,7 @@ namespace LegacyECommerceApi.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error creating product");
-                return StatusCode(500, "Internal server error");
+                return Failure(ex, "Error creating product");
             }
         }
 
@@ -91,8 +89,7 @@ namespace LegacyECommerceApi.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error updating product {ProductId}", id);
-                return StatusCode(500, "Internal server error");
+                return Failure(ex, "Error updating product {ProductId}", id);
             }
         }
 
@@ -106,8 +103,7 @@ namespace LegacyECommerceApi.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error deleting product {ProductId}", id);
-                return StatusCode(500, "Internal server error");
+                return Failure(ex, "Error deleting product {ProductId}", id);
             }
         }
 
@@ -121,8 +117,7 @@ namespace LegacyECommerceApi.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error retrieving products by category {Category}", category);
-                return StatusCode(500, "Internal server error");
+                return Failure(ex, "Error retrieving products by category {Category}", category);
             }
         }
 
@@ -136,8 +131,7 @@ namespace LegacyECommerceApi.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error retrieving active products");
-                return StatusCode(500, "Internal server error");
+                return Failure(ex, "Error retrieving active products");
             }
         }
     }

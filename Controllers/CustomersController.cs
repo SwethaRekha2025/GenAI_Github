@@ -6,15 +6,14 @@ namespace LegacyECommerceApi.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-    public class CustomersController : ControllerBase
+    public class CustomersController : LegacyApiController
     {
         private readonly ICustomerRepository _customerRepository;
-        private readonly ILogger<CustomersController> _logger;
 
         public CustomersController(ICustomerRepository customerRepository, ILogger<CustomersController> logger)
+            : base(logger)
         {
             _customerRepository = customerRepository;
-            _logger = logger;
         }
 
         [HttpGet]
@@ -27,8 +26,7 @@ namespace LegacyECommerceApi.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error retrieving customers");
-                return StatusCode(500, "Internal server error");
+                return Failure(ex, "Error retrieving customers");
             }
         }
 
@@ -46,14 +44,15 @@ namespace LegacyECommerceApi.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error retrieving customer {CustomerId}", id);
-                return StatusCode(500, "Internal server error");
+                return Failure(ex, "Error retrieving customer {CustomerId}", id);
             }
         }
 
         [HttpPost]
         public ActionResult<Customer> PostCustomer(Customer customer)
         {
+            // Unreachable in production: [ApiController] answers 400 with ValidationProblemDetails
+            // before the action body runs. Kept as the safety net if that attribute is ever removed.
             if (!ModelState.IsValid)
             {
                 return BadRequest(ModelState);
@@ -66,8 +65,7 @@ namespace LegacyECommerceApi.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error creating customer");
-                return StatusCode(500, "Internal server error");
+                return Failure(ex, "Error creating customer");
             }
         }
 
@@ -91,8 +89,7 @@ namespace LegacyECommerceApi.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error updating customer {CustomerId}", id);
-                return StatusCode(500, "Internal server error");
+                return Failure(ex, "Error updating customer {CustomerId}", id);
             }
         }
 
@@ -106,8 +103,7 @@ namespace LegacyECommerceApi.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error deleting customer {CustomerId}", id);
-                return StatusCode(500, "Internal server error");
+                return Failure(ex, "Error deleting customer {CustomerId}", id);
             }
         }
 
@@ -125,8 +121,7 @@ namespace LegacyECommerceApi.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error retrieving customer by email {Email}", email);
-                return StatusCode(500, "Internal server error");
+                return Failure(ex, "Error retrieving customer by email {Email}", email);
             }
         }
     }

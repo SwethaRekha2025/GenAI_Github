@@ -6,15 +6,14 @@ namespace LegacyECommerceApi.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-    public class OrdersController : ControllerBase
+    public class OrdersController : LegacyApiController
     {
         private readonly IOrderRepository _orderRepository;
-        private readonly ILogger<OrdersController> _logger;
 
         public OrdersController(IOrderRepository orderRepository, ILogger<OrdersController> logger)
+            : base(logger)
         {
             _orderRepository = orderRepository;
-            _logger = logger;
         }
 
         [HttpGet]
@@ -27,8 +26,7 @@ namespace LegacyECommerceApi.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error retrieving orders");
-                return StatusCode(500, "Internal server error");
+                return Failure(ex, "Error retrieving orders");
             }
         }
 
@@ -46,14 +44,15 @@ namespace LegacyECommerceApi.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error retrieving order {OrderId}", id);
-                return StatusCode(500, "Internal server error");
+                return Failure(ex, "Error retrieving order {OrderId}", id);
             }
         }
 
         [HttpPost]
         public ActionResult<Order> PostOrder(Order order)
         {
+            // Unreachable in production: [ApiController] answers 400 with ValidationProblemDetails
+            // before the action body runs. Kept as the safety net if that attribute is ever removed.
             if (!ModelState.IsValid)
             {
                 return BadRequest(ModelState);
@@ -61,14 +60,15 @@ namespace LegacyECommerceApi.Controllers
 
             try
             {
+                // The only business rule in the HTTP layer. It belongs in an order service, sourced
+                // from an injected TimeProvider; both are later phases.
                 order.OrderDate = DateTime.UtcNow;
                 var createdOrder = _orderRepository.Add(order);
                 return CreatedAtAction(nameof(GetOrder), new { id = createdOrder.OrderId }, createdOrder);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error creating order");
-                return StatusCode(500, "Internal server error");
+                return Failure(ex, "Error creating order");
             }
         }
 
@@ -92,8 +92,7 @@ namespace LegacyECommerceApi.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error updating order {OrderId}", id);
-                return StatusCode(500, "Internal server error");
+                return Failure(ex, "Error updating order {OrderId}", id);
             }
         }
 
@@ -107,8 +106,7 @@ namespace LegacyECommerceApi.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error deleting order {OrderId}", id);
-                return StatusCode(500, "Internal server error");
+                return Failure(ex, "Error deleting order {OrderId}", id);
             }
         }
 
@@ -122,8 +120,7 @@ namespace LegacyECommerceApi.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error retrieving orders for customer {CustomerId}", customerId);
-                return StatusCode(500, "Internal server error");
+                return Failure(ex, "Error retrieving orders for customer {CustomerId}", customerId);
             }
         }
 
@@ -137,8 +134,7 @@ namespace LegacyECommerceApi.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error retrieving orders by status {Status}", status);
-                return StatusCode(500, "Internal server error");
+                return Failure(ex, "Error retrieving orders by status {Status}", status);
             }
         }
     }
