@@ -1,0 +1,33 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LegacyECommerceApi", "LegacyECommerceApi.csproj", "{5B8FCBA9-FC5C-488B-81E3-4135ECB80C84}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{6883055C-8F40-46D5-97D4-FB7B6F9F5FF6}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LegacyECommerceApi.Tests", "tests\LegacyECommerceApi.Tests\LegacyECommerceApi.Tests.csproj", "{ACB7913D-3851-4001-960F-1996DDB8668A}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{5B8FCBA9-FC5C-488B-81E3-4135ECB80C84}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5B8FCBA9-FC5C-488B-81E3-4135ECB80C84}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5B8FCBA9-FC5C-488B-81E3-4135ECB80C84}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5B8FCBA9-FC5C-488B-81E3-4135ECB80C84}.Release|Any CPU.Build.0 = Release|Any CPU
+		{ACB7913D-3851-4001-960F-1996DDB8668A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{ACB7913D-3851-4001-960F-1996DDB8668A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{ACB7913D-3851-4001-960F-1996DDB8668A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{ACB7913D-3851-4001-960F-1996DDB8668A}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{ACB7913D-3851-4001-960F-1996DDB8668A} = {6883055C-8F40-46D5-97D4-FB7B6F9F5FF6}
+	EndGlobalSection
+EndGlobal

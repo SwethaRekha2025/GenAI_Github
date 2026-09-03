@@ -7,6 +7,16 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The test project lives under tests/ inside this project's directory, so the Web SDK's
+         default **/*.cs glob would otherwise compile test sources into the application assembly
+         and drag xUnit into the shipped output. Compile-only exclusion; no runtime effect. -->
+    <Compile Remove="tests/**" />
+    <Content Remove="tests/**" />
+    <None Remove="tests/**" />
+    <EmbeddedResource Remove="tests/**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="8.0.21" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.5.0" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" />
