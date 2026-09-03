@@ -77,6 +77,11 @@ namespace LegacyECommerceApi.Controllers
         {
             if (id != order.OrderId)
             {
+                // A caller sending a mismatched id is a client defect worth seeing; without this
+                // the rejection is invisible and a rising 4xx rate cannot be diagnosed (LOG-6).
+                Logger.LogWarning(
+                    "Rejected order update: route id {RouteId} does not match body id {BodyId}",
+                    id, order.OrderId);
                 return BadRequest("Order ID mismatch");
             }
 

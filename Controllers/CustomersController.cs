@@ -74,6 +74,11 @@ namespace LegacyECommerceApi.Controllers
         {
             if (id != customer.CustomerId)
             {
+                // A caller sending a mismatched id is a client defect worth seeing; without this
+                // the rejection is invisible and a rising 4xx rate cannot be diagnosed (LOG-6).
+                Logger.LogWarning(
+                    "Rejected customer update: route id {RouteId} does not match body id {BodyId}",
+                    id, customer.CustomerId);
                 return BadRequest("Customer ID mismatch");
             }
 
@@ -121,7 +126,9 @@ namespace LegacyECommerceApi.Controllers
             }
             catch (Exception ex)
             {
-                return Failure(ex, "Error retrieving customer by email {Email}", email);
+                // The address itself must not reach the log store (LOG-3); the hash still lets a
+                // reported failure be correlated with the lookup that produced it.
+                return Failure(ex, "Error retrieving customer by email {EmailHash}", Redact(email));
             }
         }
     }
