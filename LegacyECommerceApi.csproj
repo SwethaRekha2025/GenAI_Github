@@ -4,6 +4,9 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Enables `dotnet user-secrets` so real credentials can live outside the repository.
+         appsettings.json holds only a non-secret LocalDB default. -->
+    <UserSecretsId>legacy-ecommerce-api-3f7c1a92</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
