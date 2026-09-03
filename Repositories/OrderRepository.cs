@@ -6,151 +6,138 @@ namespace LegacyECommerceApi.Repositories
 {
     public class OrderRepository : IOrderRepository
     {
+        private const string ConnectionStringName = "DefaultConnection";
+
+        // Column widths mirror DatabaseSetup.sql. Binding parameters at the column's declared size
+        // (rather than letting AddWithValue size them to each value) keeps one cached plan per
+        // statement instead of one per distinct string length.
+        private const int StatusSize = 50;
+        private const int ShippingAddressSize = 500;
+
+        /// <summary>
+        /// The order/customer projection shared by all four read paths, which differ only in their
+        /// WHERE and ORDER BY clauses. It selects the customer's full contact details onto every
+        /// row; that is pinned deliberately by the characterization tests (finding SEC-4). Narrowing
+        /// it is a response-DTO change for a later phase, not something to slip in here.
+        /// </summary>
+        private const string BaseOrderQuery = """
+            SELECT o.OrderId, o.CustomerId, o.OrderDate, o.TotalAmount, o.Status, o.ShippingAddress,
+                   c.FirstName, c.LastName, c.Email, c.Phone, c.Address, c.CreatedDate
+            FROM Orders o
+            INNER JOIN Customers c ON o.CustomerId = c.CustomerId
+            """;
+
+        private const string SelectOrderByIdSql =
+            $"{BaseOrderQuery} WHERE o.OrderId = @OrderId";
+
+        private const string SelectAllOrdersSql =
+            $"{BaseOrderQuery} ORDER BY o.OrderDate DESC";
+
+        private const string SelectOrdersByCustomerSql =
+            $"{BaseOrderQuery} WHERE o.CustomerId = @CustomerId ORDER BY o.OrderDate DESC";
+
+        private const string SelectOrdersByStatusSql =
+            $"{BaseOrderQuery} WHERE o.Status = @Status ORDER BY o.OrderDate DESC";
+
+        /// <summary>
+        /// Selects only Name, Description and Category from Products, so the nested Product on each
+        /// item reports Price 0, StockQuantity 0 and IsActive true from C# defaults rather than from
+        /// data. Pinned by the characterization tests; fixing it is a separate, deliberate change.
+        /// </summary>
+        private const string SelectOrderItemsSql = """
+            SELECT oi.OrderItemId, oi.OrderId, oi.ProductId, oi.Quantity, oi.UnitPrice,
+                   p.Name, p.Description, p.Category
+            FROM OrderItems oi
+            INNER JOIN Products p ON oi.ProductId = p.ProductId
+            WHERE oi.OrderId = @OrderId
+            """;
+
+        private const string InsertOrderSql = """
+            INSERT INTO Orders (CustomerId, OrderDate, TotalAmount, Status, ShippingAddress)
+            VALUES (@CustomerId, @OrderDate, @TotalAmount, @Status, @ShippingAddress);
+            SELECT CAST(SCOPE_IDENTITY() as int);
+            """;
+
+        private const string InsertOrderItemSql = """
+            INSERT INTO OrderItems (OrderId, ProductId, Quantity, UnitPrice)
+            VALUES (@OrderId, @ProductId, @Quantity, @UnitPrice);
+            SELECT CAST(SCOPE_IDENTITY() as int);
+            """;
+
+        private const string UpdateOrderSql = """
+            UPDATE Orders
+            SET TotalAmount = @TotalAmount, Status = @Status, ShippingAddress = @ShippingAddress
+            WHERE OrderId = @OrderId
+            """;
+
+        private const string DeleteOrderItemsSql = "DELETE FROM OrderItems WHERE OrderId = @OrderId";
+
+        private const string DeleteOrderSql = "DELETE FROM Orders WHERE OrderId = @OrderId";
+
         private readonly string _connectionString;
         private readonly ILogger<OrderRepository> _logger;
 
         public OrderRepository(IConfiguration configuration, ILogger<OrderRepository> logger)
         {
-            _connectionString = configuration.GetConnectionString("DefaultConnection") 
-                ?? throw new ArgumentNullException(nameof(configuration));
+            _connectionString = configuration.GetConnectionString(ConnectionStringName)
+                ?? throw new InvalidOperationException(
+                    $"Connection string '{ConnectionStringName}' is not configured.");
             _logger = logger;
         }
 
+        /// <summary>
+        /// Two queries over one connection: the header, then the line items only if the header was
+        /// found. Each read lives in its own method so its reader is disposed before the next one
+        /// opens - a single connection cannot hold two open readers without MARS.
+        /// </summary>
         public async Task<Order?> GetByIdAsync(int id)
         {
-            const string orderQuery = @"
-                SELECT o.OrderId, o.CustomerId, o.OrderDate, o.TotalAmount, o.Status, o.ShippingAddress,
-                       c.FirstName, c.LastName, c.Email, c.Phone, c.Address, c.CreatedDate
-                FROM Orders o
-                INNER JOIN Customers c ON o.CustomerId = c.CustomerId
-                WHERE o.OrderId = @OrderId";
+            await using var connection = new SqlConnection(_connectionString);
+            await connection.OpenAsync();
 
-            const string itemsQuery = @"
-                SELECT oi.OrderItemId, oi.OrderId, oi.ProductId, oi.Quantity, oi.UnitPrice,
-                       p.Name, p.Description, p.Category
-                FROM OrderItems oi
-                INNER JOIN Products p ON oi.ProductId = p.ProductId
-                WHERE oi.OrderId = @OrderId";
-
-            using (var connection = new SqlConnection(_connectionString))
+            var order = await ReadOrderAsync(connection, id);
+            if (order != null)
             {
-                await connection.OpenAsync();
-                
-                Order? order = null;
-                
-                using (var command = new SqlCommand(orderQuery, connection))
-                {
-                    command.Parameters.AddWithValue("@OrderId", id);
-                    
-                    using (var reader = await command.ExecuteReaderAsync())
-                    {
-                        if (await reader.ReadAsync())
-                        {
-                            order = MapOrder(reader);
-                        }
-                    }
-                }
-
-                if (order != null)
-                {
-                    using (var command = new SqlCommand(itemsQuery, connection))
-                    {
-                        command.Parameters.AddWithValue("@OrderId", id);
-                        
-                        using (var reader = await command.ExecuteReaderAsync())
-                        {
-                            while (await reader.ReadAsync())
-                            {
-                                order.OrderItems.Add(MapOrderItem(reader));
-                            }
-                        }
-                    }
-                }
-
-                return order;
+                order.OrderItems.AddRange(await ReadOrderItemsAsync(connection, id));
             }
+
+            return order;
         }
 
-        public async Task<IEnumerable<Order>> GetAllAsync()
-        {
-            const string query = @"
-                SELECT o.OrderId, o.CustomerId, o.OrderDate, o.TotalAmount, o.Status, o.ShippingAddress,
-                       c.FirstName, c.LastName, c.Email, c.Phone, c.Address, c.CreatedDate
-                FROM Orders o
-                INNER JOIN Customers c ON o.CustomerId = c.CustomerId
-                ORDER BY o.OrderDate DESC";
+        public Task<IEnumerable<Order>> GetAllAsync() => QueryOrdersAsync(SelectAllOrdersSql);
 
-            var orders = new List<Order>();
-            
-            using (var connection = new SqlConnection(_connectionString))
-            {
-                using (var command = new SqlCommand(query, connection))
-                {
-                    await connection.OpenAsync();
-                    using (var reader = await command.ExecuteReaderAsync())
-                    {
-                        while (await reader.ReadAsync())
-                        {
-                            orders.Add(MapOrder(reader));
-                        }
-                    }
-                }
-            }
-            return orders;
-        }
+        public Task<IEnumerable<Order>> GetByCustomerIdAsync(int customerId) =>
+            QueryOrdersAsync(SelectOrdersByCustomerSql, command =>
+                command.Parameters.Add(Int("@CustomerId", customerId)));
+
+        public IEnumerable<Order> GetByStatus(string status) =>
+            QueryOrders(SelectOrdersByStatusSql, command =>
+                command.Parameters.Add(Text("@Status", status, StatusSize)));
 
         public Order Add(Order order)
         {
-            using (var connection = new SqlConnection(_connectionString))
+            using var connection = new SqlConnection(_connectionString);
+            connection.Open();
+
+            using var transaction = connection.BeginTransaction();
+            try
             {
-                connection.Open();
-                using (var transaction = connection.BeginTransaction())
+                order.OrderId = InsertOrder(connection, transaction, order);
+
+                foreach (var item in order.OrderItems)
                 {
-                    try
-                    {
-                        const string orderQuery = @"
-                            INSERT INTO Orders (CustomerId, OrderDate, TotalAmount, Status, ShippingAddress)
-                            VALUES (@CustomerId, @OrderDate, @TotalAmount, @Status, @ShippingAddress);
-                            SELECT CAST(SCOPE_IDENTITY() as int);";
-
-                        using (var command = new SqlCommand(orderQuery, connection, transaction))
-                        {
-                            command.Parameters.AddWithValue("@CustomerId", order.CustomerId);
-                            command.Parameters.AddWithValue("@OrderDate", order.OrderDate);
-                            command.Parameters.AddWithValue("@TotalAmount", order.TotalAmount);
-                            command.Parameters.AddWithValue("@Status", order.Status);
-                            command.Parameters.AddWithValue("@ShippingAddress", (object?)order.ShippingAddress ?? DBNull.Value);
-
-                            order.OrderId = (int)command.ExecuteScalar();
-                        }
-
-                        foreach (var item in order.OrderItems)
-                        {
-                            const string itemQuery = @"
-                                INSERT INTO OrderItems (OrderId, ProductId, Quantity, UnitPrice)
-                                VALUES (@OrderId, @ProductId, @Quantity, @UnitPrice);
-                                SELECT CAST(SCOPE_IDENTITY() as int);";
-
-                            using (var command = new SqlCommand(itemQuery, connection, transaction))
-                            {
-                                command.Parameters.AddWithValue("@OrderId", order.OrderId);
-                                command.Parameters.AddWithValue("@ProductId", item.ProductId);
-                                command.Parameters.AddWithValue("@Quantity", item.Quantity);
-                                command.Parameters.AddWithValue("@UnitPrice", item.UnitPrice);
-
-                                item.OrderItemId = (int)command.ExecuteScalar();
-                                item.OrderId = order.OrderId;
-                            }
-                        }
-
-                        transaction.Commit();
-                    }
-                    catch
-                    {
-                        transaction.Rollback();
-                        throw;
-                    }
+                    // Assignment order matches the original: the generated id lands first, so a
+                    // mid-loop failure leaves the same partial object state as before.
+                    item.OrderItemId = InsertOrderItem(connection, transaction, order.OrderId, item);
+                    item.OrderId = order.OrderId;
                 }
+
+                transaction.Commit();
+            }
+            catch
+            {
+                RollbackQuietly(transaction);
+                throw;
             }
 
             _logger.LogInformation("Order created with ID: {OrderId}", order.OrderId);
@@ -159,125 +146,201 @@ namespace LegacyECommerceApi.Repositories
 
         public void Update(Order order)
         {
-            const string query = @"
-                UPDATE Orders 
-                SET TotalAmount = @TotalAmount, Status = @Status, ShippingAddress = @ShippingAddress
-                WHERE OrderId = @OrderId";
+            using var connection = new SqlConnection(_connectionString);
+            using var command = new SqlCommand(UpdateOrderSql, connection);
+            command.Parameters.Add(Int("@OrderId", order.OrderId));
+            command.Parameters.Add(Money("@TotalAmount", order.TotalAmount));
+            command.Parameters.Add(Text("@Status", order.Status, StatusSize));
+            command.Parameters.Add(Text("@ShippingAddress", order.ShippingAddress, ShippingAddressSize));
 
-            using (var connection = new SqlConnection(_connectionString))
-            {
-                using (var command = new SqlCommand(query, connection))
-                {
-                    command.Parameters.AddWithValue("@OrderId", order.OrderId);
-                    command.Parameters.AddWithValue("@TotalAmount", order.TotalAmount);
-                    command.Parameters.AddWithValue("@Status", order.Status);
-                    command.Parameters.AddWithValue("@ShippingAddress", (object?)order.ShippingAddress ?? DBNull.Value);
-
-                    connection.Open();
-                    command.ExecuteNonQuery();
-                }
-            }
+            connection.Open();
+            command.ExecuteNonQuery();
 
             _logger.LogInformation("Order updated: {OrderId}", order.OrderId);
         }
 
         public void Delete(int id)
         {
-            using (var connection = new SqlConnection(_connectionString))
+            using var connection = new SqlConnection(_connectionString);
+            connection.Open();
+
+            using var transaction = connection.BeginTransaction();
+            try
             {
-                connection.Open();
-                using (var transaction = connection.BeginTransaction())
-                {
-                    try
-                    {
-                        const string deleteItemsQuery = "DELETE FROM OrderItems WHERE OrderId = @OrderId";
-                        using (var command = new SqlCommand(deleteItemsQuery, connection, transaction))
-                        {
-                            command.Parameters.AddWithValue("@OrderId", id);
-                            command.ExecuteNonQuery();
-                        }
+                // Children before parent, so the OrderItems -> Orders foreign key stays satisfied.
+                ExecuteForOrder(connection, transaction, DeleteOrderItemsSql, id);
+                ExecuteForOrder(connection, transaction, DeleteOrderSql, id);
 
-                        const string deleteOrderQuery = "DELETE FROM Orders WHERE OrderId = @OrderId";
-                        using (var command = new SqlCommand(deleteOrderQuery, connection, transaction))
-                        {
-                            command.Parameters.AddWithValue("@OrderId", id);
-                            command.ExecuteNonQuery();
-                        }
-
-                        transaction.Commit();
-                    }
-                    catch
-                    {
-                        transaction.Rollback();
-                        throw;
-                    }
-                }
+                transaction.Commit();
+            }
+            catch
+            {
+                RollbackQuietly(transaction);
+                throw;
             }
 
             _logger.LogInformation("Order deleted: {OrderId}", id);
         }
 
-        public async Task<IEnumerable<Order>> GetByCustomerIdAsync(int customerId)
-        {
-            const string query = @"
-                SELECT o.OrderId, o.CustomerId, o.OrderDate, o.TotalAmount, o.Status, o.ShippingAddress,
-                       c.FirstName, c.LastName, c.Email, c.Phone, c.Address, c.CreatedDate
-                FROM Orders o
-                INNER JOIN Customers c ON o.CustomerId = c.CustomerId
-                WHERE o.CustomerId = @CustomerId
-                ORDER BY o.OrderDate DESC";
+        // ----- reads -----
 
-            var orders = new List<Order>();
-            
-            using (var connection = new SqlConnection(_connectionString))
+        private static async Task<Order?> ReadOrderAsync(SqlConnection connection, int orderId)
+        {
+            await using var command = new SqlCommand(SelectOrderByIdSql, connection);
+            command.Parameters.Add(Int("@OrderId", orderId));
+
+            await using var reader = await command.ExecuteReaderAsync();
+            return await reader.ReadAsync() ? MapOrder(reader) : null;
+        }
+
+        private static async Task<List<OrderItem>> ReadOrderItemsAsync(SqlConnection connection, int orderId)
+        {
+            var items = new List<OrderItem>();
+
+            await using var command = new SqlCommand(SelectOrderItemsSql, connection);
+            command.Parameters.Add(Int("@OrderId", orderId));
+
+            await using var reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
             {
-                using (var command = new SqlCommand(query, connection))
-                {
-                    command.Parameters.AddWithValue("@CustomerId", customerId);
-                    
-                    await connection.OpenAsync();
-                    using (var reader = await command.ExecuteReaderAsync())
-                    {
-                        while (await reader.ReadAsync())
-                        {
-                            orders.Add(MapOrder(reader));
-                        }
-                    }
-                }
+                items.Add(MapOrderItem(reader));
             }
+
+            return items;
+        }
+
+        private async Task<IEnumerable<Order>> QueryOrdersAsync(
+            string sql,
+            Action<SqlCommand>? bindParameters = null)
+        {
+            var orders = new List<Order>();
+
+            await using var connection = new SqlConnection(_connectionString);
+            await using var command = new SqlCommand(sql, connection);
+            bindParameters?.Invoke(command);
+
+            await connection.OpenAsync();
+            await using var reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                orders.Add(MapOrder(reader));
+            }
+
             return orders;
         }
 
-        public IEnumerable<Order> GetByStatus(string status)
+        private IEnumerable<Order> QueryOrders(string sql, Action<SqlCommand>? bindParameters = null)
         {
-            const string query = @"
-                SELECT o.OrderId, o.CustomerId, o.OrderDate, o.TotalAmount, o.Status, o.ShippingAddress,
-                       c.FirstName, c.LastName, c.Email, c.Phone, c.Address, c.CreatedDate
-                FROM Orders o
-                INNER JOIN Customers c ON o.CustomerId = c.CustomerId
-                WHERE o.Status = @Status
-                ORDER BY o.OrderDate DESC";
-
             var orders = new List<Order>();
-            
-            using (var connection = new SqlConnection(_connectionString))
+
+            using var connection = new SqlConnection(_connectionString);
+            using var command = new SqlCommand(sql, connection);
+            bindParameters?.Invoke(command);
+
+            connection.Open();
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
             {
-                using (var command = new SqlCommand(query, connection))
-                {
-                    command.Parameters.AddWithValue("@Status", status);
-                    
-                    connection.Open();
-                    using (var reader = command.ExecuteReader())
-                    {
-                        while (reader.Read())
-                        {
-                            orders.Add(MapOrder(reader));
-                        }
-                    }
-                }
+                orders.Add(MapOrder(reader));
             }
+
             return orders;
         }
+
+        // ----- transactional writes -----
+
+        private static int InsertOrder(SqlConnection connection, SqlTransaction transaction, Order order)
+        {
+            using var command = new SqlCommand(InsertOrderSql, connection, transaction);
+            command.Parameters.Add(Int("@CustomerId", order.CustomerId));
+            command.Parameters.Add(DateTime2Legacy("@OrderDate", order.OrderDate));
+            command.Parameters.Add(Money("@TotalAmount", order.TotalAmount));
+            command.Parameters.Add(Text("@Status", order.Status, StatusSize));
+            command.Parameters.Add(Text("@ShippingAddress", order.ShippingAddress, ShippingAddressSize));
+
+            return ReadGeneratedId(command.ExecuteScalar(), "OrderId");
+        }
+
+        /// <summary>
+        /// A fresh command per line item, matching the original. Hoisting one command out of the
+        /// loop and re-binding values would be faster but changes what goes over the wire, so it is
+        /// deferred until the transaction is covered by an executed test.
+        /// </summary>
+        private static int InsertOrderItem(
+            SqlConnection connection,
+            SqlTransaction transaction,
+            int orderId,
+            OrderItem item)
+        {
+            using var command = new SqlCommand(InsertOrderItemSql, connection, transaction);
+            command.Parameters.Add(Int("@OrderId", orderId));
+            command.Parameters.Add(Int("@ProductId", item.ProductId));
+            command.Parameters.Add(Int("@Quantity", item.Quantity));
+            command.Parameters.Add(Money("@UnitPrice", item.UnitPrice));
+
+            return ReadGeneratedId(command.ExecuteScalar(), "OrderItemId");
+        }
+
+        private static void ExecuteForOrder(
+            SqlConnection connection,
+            SqlTransaction transaction,
+            string sql,
+            int orderId)
+        {
+            using var command = new SqlCommand(sql, connection, transaction);
+            command.Parameters.Add(Int("@OrderId", orderId));
+            command.ExecuteNonQuery();
+        }
+
+        /// <summary>
+        /// Rolls back without letting a rollback failure escape. An unguarded Rollback() in a catch
+        /// block replaces the exception that caused the rollback - which is the one worth reporting
+        /// (finding ERR-6).
+        /// </summary>
+        private void RollbackQuietly(SqlTransaction transaction)
+        {
+            try
+            {
+                transaction.Rollback();
+            }
+            catch (Exception rollbackFailure)
+            {
+                _logger.LogError(rollbackFailure, "Transaction rollback failed; reporting the original error.");
+            }
+        }
+
+        // ----- parameter binding -----
+
+        private static SqlParameter Text(string name, string? value, int size) =>
+            new(name, SqlDbType.NVarChar, size) { Value = (object?)value ?? DBNull.Value };
+
+        private static SqlParameter Int(string name, int value) =>
+            new(name, SqlDbType.Int) { Value = value };
+
+        /// <summary>
+        /// Pins the type without pinning precision or scale. Setting Scale explicitly would make the
+        /// driver adjust the value client-side, which can change a stored amount (12.345 becoming
+        /// 12.34 rather than the 12.35 the server rounds to today). Adopt decimal(18,2) here once
+        /// the OrderRepository characterization tests have run against a real server.
+        /// </summary>
+        private static SqlParameter Money(string name, decimal value) =>
+            new(name, SqlDbType.Decimal) { Value = value };
+
+        /// <summary>
+        /// The column is datetime2, but AddWithValue has always inferred SqlDbType.DateTime, which
+        /// rounds to ~3.33 ms before transmission. Kept deliberately so stored timestamps do not
+        /// silently gain precision; switch to SqlDbType.DateTime2 as a separate, tested change.
+        /// </summary>
+        private static SqlParameter DateTime2Legacy(string name, DateTime value) =>
+            new(name, SqlDbType.DateTime) { Value = value };
+
+        private static int ReadGeneratedId(object? scalar, string idColumn) =>
+            scalar is null or DBNull
+                ? throw new InvalidOperationException(
+                    $"The INSERT did not return a generated {idColumn} from SCOPE_IDENTITY().")
+                : Convert.ToInt32(scalar);
+
+        // ----- mapping -----
 
         private static Order MapOrder(SqlDataReader reader)
         {
